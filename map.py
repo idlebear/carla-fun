@@ -42,7 +42,7 @@ from matplotlib.transforms import Affine2D
 from map import GlobalRoutePlannerDAO
 from map import GlobalRoutePlanner
 
-from trajectory import Cubic
+from planning.trajectory import Cubic
 
 
 def main():
@@ -153,7 +153,7 @@ def main():
         cubic_path.trajectory_alt([0, 2, 4, 5],
                                   atan2(waypoints[1][1] - waypoints[0][1], waypoints[1][0] - waypoints[0][0]),
                                   atan2(waypoints[-1][1] - waypoints[-2][1], waypoints[-1][0] - waypoints[-2][0]))
-        cubic_path.plot()
+        cubic_path.plot(scale=1)
         traj2 = cubic_path.X.copy()
 
         # # diff = [(t1[0]-t2[0], t1[1]-t2[1]) for t1, t2 in zip(traj, traj2)]
