@@ -156,12 +156,12 @@ def main():
         cubic_path.plot()
         traj2 = cubic_path.X.copy()
 
-        diff = [(t1[0]-t2[0], t1[1]-t2[1]) for t1, t2 in zip(traj, traj2)]
+        # # diff = [(t1[0]-t2[0], t1[1]-t2[1]) for t1, t2 in zip(traj, traj2)]
 
-        f = plt.figure()
-        plt.plot(range(len(diff)), [x for x, _ in diff])
-        plt.plot(range(len(diff)), [y for _, y in diff])
-        plt.show()
+        # f = plt.figure()
+        # plt.plot(range(len(diff)), [x for x, _ in diff])
+        # plt.plot(range(len(diff)), [y for _, y in diff])
+        # plt.show()
 
     finally:
         pass
