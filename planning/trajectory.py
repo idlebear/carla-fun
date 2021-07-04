@@ -67,11 +67,12 @@ class Cubic():
 
         return (ax, ay)
 
-    def trajectory(self, waypoint_speeds, theta_i, theta_f):
+    def trajectory(self, waypoint_speeds, theta_i, theta_f, cubic_fn=None):
         self.X = []
         self.X2 = []
         self.V = []
         self.t = []
+        self.theta = []
 
         v_iter = iter(waypoint_speeds)
 
@@ -121,70 +122,16 @@ class Cubic():
             except IndexError:
                 t0 = 0
 
-            (ts, x, v) = self.cubic_time_scaling_spline(self.waypoints[i-1], self.waypoints[i], v0, v1, t0, t0 + T)
+            if cubic_fn is None:
+                cubic_fn = Cubic.polynomial_time_scaling_3rd_order
+            (ts, x, v) = cubic_fn(self.waypoints[i-1], self.waypoints[i], v0, v1, t0, t0 + T, self.dt)
+
             self.t.extend(ts)
             self.V.extend(v)
             self.X.extend(x)
 
-    def trajectory_alt(self, waypoint_speeds, theta_i, theta_f):
-        self.X = []
-        self.X2 = []
-        self.V = []
-        self.t = []
-
-        v_iter = iter(waypoint_speeds)
-
-        self.angles[-1] = theta_f
-
-        for i in range(1, len(self.waypoints)):
-
-            if self.waypoints[i] == self.waypoints[i-1]:
-                continue
-
-            if i < len(self.waypoints) - 1:
-                angle_out = self.angles[i] - self.angles[i-1]
-                if angle_out > np.pi:
-                    angle_out -= np.pi * 2
-                elif angle_out < -np.pi:
-                    angle_out -= np.pi * 2
-                angle_out = angle_out / 2 + self.angles[i-1]
-            else:
-                angle_out = self.angles[i]
-
-            # initial speed is either the last one from the previous interval or
-            # we're just starting
-            try:
-                v0 = self.V[-1]
-                vi = sqrt(v0[0] * v0[0] + v0[1] * v0[1])
-            except IndexError:
-                vi = next(v_iter)
-                v0 = (vi*cos(theta_i), vi*sin(theta_i))
-
-            # with multiple speeds available, we can limit the acceleration over
-            # each interval and keep it within reasonable bounds
-            try:
-                vf = next(v_iter)
-            except StopIteration:
-                # no more speeds -- reuse the final velocity
-                vf = waypoint_speeds[-1]
-            v1 = (vf * cos(angle_out), vf * sin(angle_out))
-
-            # traversal time is the approximate (euclidean) distance divided by the
-            # average desired velocity
-            dx = self.waypoints[i][0] - self.waypoints[i-1][0]
-            dy = self.waypoints[i][1] - self.waypoints[i-1][1]
-            dist = sqrt(dx * dx + dy * dy)
-            T = dist / ((vi + vf)/2)
-            try:
-                t0 = self.t[-1]
-            except IndexError:
-                t0 = 0
-
-            (ts, x, v) = self.polynomial_time_scaling_3rd_order(
-                self.waypoints[i-1], self.waypoints[i], v0, v1, t0, t0+T)
-            self.t.extend(ts)
-            self.V.extend(v)
-            self.X.extend(x)
+        # given all of the velocity vectors, calculate the orientation(s) of the robot
+        self.theta = [atan2(vy, vx) for vx, vy in self.V]
 
     @staticmethod
     def test():
@@ -237,6 +184,9 @@ class Cubic():
                                linewidth=1, edgecolor='k', facecolor='gray')
             ax2.add_patch(c)
 
+        for x, theta in zip(self.X, self.theta):
+            ax2.plot((x[0], x[0]+0.2*cos(theta)), (x[1], x[1]+0.2*sin(theta)), 'b-')
+
         ax2.plot([x for x, _ in self.X], [y for _, y in self.X])
         plt.gca().set_aspect('equal', adjustable='box')
         plt.show()
@@ -244,7 +194,7 @@ class Cubic():
         plt.close(fig)
         plt.close(fig2)
 
-    @staticmethod
+    @ staticmethod
     def eval_cubic(a0, a1, a2, a3, t):
         return (a0*t*t*t + a1*t*t + a2*t + a3, 3*a0*t*t + 2*a1*t + a2)
 
@@ -252,7 +202,8 @@ class Cubic():
     #
     #    https://ucr-ee144.readthedocs.io/en/latest/lab6.html
     #
-    def cubic_time_scaling_spline(self, p0, p1, v0, v1, t0, t1):
+    @ staticmethod
+    def cubic_time_scaling_spline(p0, p1, v0, v1, t0, t1, dt):
         T = t1 - t0
 
         ax, ay = Cubic._calculate_coefficients(p0, p1, v0, v1, T)
@@ -260,7 +211,7 @@ class Cubic():
         X = []
         V = []
         ts = []
-        for t in np.arange(0, T, self.dt):
+        for t in np.arange(0, T, dt):
             ts.append(t + t0)
             (x, vx) = Cubic.eval_cubic(*ax, t)
             (y, vy) = Cubic.eval_cubic(*ay, t)
@@ -276,7 +227,7 @@ class Cubic():
 
         return (ts, X, V)
 
-    @staticmethod
+    @ staticmethod
     def eval_cubic_alt(a0, a1, a2, a3, t):
         return ((1/6)*a0*t*t*t + (1/2)*a1*t*t + a2*t + a3, (1/2)*a0*t*t + a1*t + a2)
 
@@ -289,9 +240,10 @@ class Cubic():
     # is a small variation between the two that expands as the trajectory gets longer.  Don't
     # know yet if this is significant.
     #
-    def polynomial_time_scaling_3rd_order(self, p0, p1, v0, v1, t0, t1):
+    @ staticmethod
+    def polynomial_time_scaling_3rd_order(p0, p1, v0, v1, t0, t1, dt):
         '''
-            Given a position, velocity and orientation for both the starting and ending position, as well 
+            Given a position, velocity and orientation for both the starting and ending position, as well
             as the time interval, derive the cubic equation that describes the trajectory.
         '''
 
@@ -307,7 +259,7 @@ class Cubic():
         X = []
         V = []
         ts = []
-        for t in np.arange(0, T, self.dt):
+        for t in np.arange(0, T, dt):
             ts.append(t + t0)
             (x, vx) = Cubic.eval_cubic_alt(ax, bx, v0[0], p0[0], t)
             (y, vy) = Cubic.eval_cubic_alt(ay, by, v0[1], p0[1], t)
