@@ -29,14 +29,15 @@ from enum import IntEnum
 
 class Cubic():
 
-    class TrajVal(IntEnum):
+    class TrajVar(IntEnum):
         t = 0
         x = 1
         y = 2
         vx = 3
         vy = 4
-        theta = 5
-        num_vals = 6
+        v = 5
+        yaw = 6
+        num_vals = 7
 
     def __init__(self, waypoints, dt):
 
@@ -60,16 +61,17 @@ class Cubic():
         # copy the last angle for the last waypoint
         self.angles.append(self.angles[-1])
 
-    def trajectory(self, waypoint_speeds, theta_i, theta_f, cubic_fn=None):
+    def trajectory(self, waypoint_speeds, yaw_i, yaw_f, cubic_fn=None):
         self.X = []
         self.X2 = []
         self.V = []
         self.t = []
-        self.theta = []
+        self.yaw = []
+        self.v = []
 
         v_iter = iter(waypoint_speeds)
 
-        self.angles[-1] = theta_f
+        self.angles[-1] = yaw_f
 
         for i in range(1, len(self.waypoints)):
 
@@ -93,7 +95,7 @@ class Cubic():
                 vi = sqrt(v0[0] * v0[0] + v0[1] * v0[1])
             except IndexError:
                 vi = next(v_iter)
-                v0 = (vi*cos(theta_i), vi*sin(theta_i))
+                v0 = (vi*cos(yaw_i), vi*sin(yaw_i))
 
             # with multiple speeds available, we can limit the acceleration over
             # each interval and keep it within reasonable bounds
@@ -123,13 +125,15 @@ class Cubic():
             self.V.extend(v)
             self.X.extend(x)
 
-        # given all of the velocity vectors, calculate the orientation(s) of the robot
-        self.theta = [atan2(vy, vx) for vx, vy in self.V]
+        # given all of the velocity vectors, calculate the orientation(s) of the robot and the
+        # magnitude of the velocity
+        self.yaw = [atan2(vy, vx) for vx, vy in self.V]
+        self.v = [sqrt(vx*vx + vy * vy) for vx, vy in self.V]
 
-    def np_trajectory(self, waypoint_speeds, theta_i, theta_f, cubic_fn=None):
+    def np_trajectory(self, waypoint_speeds, yaw_i, yaw_f, cubic_fn=None):
 
         v_iter = iter(waypoint_speeds)
-        self.angles[-1] = theta_f
+        self.angles[-1] = yaw_f
 
         for i in range(1, len(self.waypoints)):
 
@@ -149,11 +153,11 @@ class Cubic():
             # initial speed is either the last one from the previous interval or
             # we're just starting
             try:
-                v0 = (self.traj[Cubic.TrajVal.vx, -1], self.traj[Cubic.TrajVal.vy, -1])
+                v0 = (self.traj[Cubic.TrajVar.vx, -1], self.traj[Cubic.TrajVar.vy, -1])
                 vi = sqrt(v0[0] * v0[0] + v0[1] * v0[1])
             except TypeError:
                 vi = next(v_iter)
-                v0 = (vi*cos(theta_i), vi*sin(theta_i))
+                v0 = (vi*cos(yaw_i), vi*sin(yaw_i))
 
             # with multiple speeds available, we can limit the acceleration over
             # each interval and keep it within reasonable bounds
@@ -171,7 +175,7 @@ class Cubic():
             dist = sqrt(dx * dx + dy * dy)
             T = dist / ((vi + vf)/2)
             try:
-                t0 = self.traj[Cubic.TrajVal.t, -1]
+                t0 = self.traj[Cubic.TrajVar.t, -1]
             except TypeError:
                 t0 = 0
 
@@ -194,9 +198,9 @@ class Cubic():
         cubic_trajectory = Cubic(waypoints=waypoints, dt=dt)
 
         # set the target parameters
-        initial_theta = 0
-        final_theta = 0
-        cubic_trajectory.trajectory([0, 0.5], initial_theta, final_theta,
+        initial_yaw = 0
+        final_yaw = 0
+        cubic_trajectory.trajectory([0, 0.5], initial_yaw, final_yaw,
                                     cubic_fn=Cubic.polynomial_time_scaling_3rd_order)
 
         return cubic_trajectory
@@ -211,9 +215,9 @@ class Cubic():
         cubic_trajectory = Cubic(waypoints=waypoints, dt=dt)
 
         # set the target parameters
-        initial_theta = 0
-        final_theta = 0
-        cubic_trajectory.np_trajectory([0, 0.5], initial_theta, final_theta,
+        initial_yaw = 0
+        final_yaw = 0
+        cubic_trajectory.np_trajectory([0, 0.5], initial_yaw, final_yaw,
                                        cubic_fn=Cubic.np_polynomial_time_scaling_3rd_order)
 
         return cubic_trajectory
@@ -227,8 +231,7 @@ class Cubic():
         ax[1].plot(self.t, [x for x, _ in self.V])
         ax[1].plot(self.t, [y for _, y in self.V])
 
-        mag_v = [sqrt(vx*vx + vy * vy) for vx, vy in self.V]
-        ax[1].plot(self.t, mag_v)
+        ax[1].plot(self.t, self.v)
 
         fig2, ax2 = plt.subplots()
         for wp in self.waypoints:
@@ -237,8 +240,8 @@ class Cubic():
                                linewidth=1, edgecolor='k', facecolor='gray')
             ax2.add_patch(c)
 
-        for x, theta in zip(self.X, self.theta):
-            ax2.plot((x[0], x[0]+0.2*cos(theta)), (x[1], x[1]+0.2*sin(theta)), 'b-')
+        for x, yaw in zip(self.X, self.yaw):
+            ax2.plot((x[0], x[0]+0.2*cos(yaw)), (x[1], x[1]+0.2*sin(yaw)), 'b-')
 
         ax2.plot([x for x, _ in self.X], [y for _, y in self.X])
         plt.gca().set_aspect('equal', adjustable='box')
@@ -250,14 +253,13 @@ class Cubic():
     def np_plot(self, scale=0.1):
         fig, ax = plt.subplots(2, 1)
 
-        ax[0].plot(self.traj[Cubic.TrajVal.t, :], self.traj[Cubic.TrajVal.x, :])
-        ax[0].plot(self.traj[Cubic.TrajVal.t, :], self.traj[Cubic.TrajVal.y, :])
+        ax[0].plot(self.traj[Cubic.TrajVar.t, :], self.traj[Cubic.TrajVar.x, :])
+        ax[0].plot(self.traj[Cubic.TrajVar.t, :], self.traj[Cubic.TrajVar.y, :])
 
-        ax[1].plot(self.traj[Cubic.TrajVal.t, :], self.traj[Cubic.TrajVal.vx, :])
-        ax[1].plot(self.traj[Cubic.TrajVal.t, :], self.traj[Cubic.TrajVal.vy, :])
+        ax[1].plot(self.traj[Cubic.TrajVar.t, :], self.traj[Cubic.TrajVar.vx, :])
+        ax[1].plot(self.traj[Cubic.TrajVar.t, :], self.traj[Cubic.TrajVar.vy, :])
 
-        mag_v = np.sqrt(np.power(self.traj[Cubic.TrajVal.vx, :], 2) + np.power(self.traj[Cubic.TrajVal.vy, :], 2))
-        ax[1].plot(self.traj[Cubic.TrajVal.t, :], mag_v)
+        ax[1].plot(self.traj[Cubic.TrajVar.t, :], self.traj[Cubic.TrajVar.v, :])
 
         fig2, ax2 = plt.subplots()
         for wp in self.waypoints:
@@ -266,10 +268,10 @@ class Cubic():
                                linewidth=1, edgecolor='k', facecolor='gray')
             ax2.add_patch(c)
 
-        ax2.plot((self.traj[Cubic.TrajVal.x, :], self.traj[Cubic.TrajVal.x, :]+0.2*np.cos(self.traj[Cubic.TrajVal.theta, :])),
-                 (self.traj[Cubic.TrajVal.y, :], self.traj[Cubic.TrajVal.y, :]+0.2*np.sin(self.traj[Cubic.TrajVal.theta, :])), 'b-')
+        ax2.plot((self.traj[Cubic.TrajVar.x, :], self.traj[Cubic.TrajVar.x, :]+0.2*np.cos(self.traj[Cubic.TrajVar.yaw, :])),
+                 (self.traj[Cubic.TrajVar.y, :], self.traj[Cubic.TrajVar.y, :]+0.2*np.sin(self.traj[Cubic.TrajVar.yaw, :])), 'b-')
 
-        ax2.plot(self.traj[Cubic.TrajVal.x, :], self.traj[Cubic.TrajVal.y, :])
+        ax2.plot(self.traj[Cubic.TrajVar.x, :], self.traj[Cubic.TrajVar.y, :])
         plt.gca().set_aspect('equal', adjustable='box')
         plt.show()
 
@@ -341,19 +343,19 @@ class Cubic():
         ax, ay = Cubic._calculate_coefficients(p0, p1, v0, v1, T)
 
         n = ceil(T / dt)
-        results = np.zeros((Cubic.TrajVal.num_vals, n+1))
+        results = np.zeros((Cubic.TrajVar.num_vals, n+1))
 
         for i in range(n):
             t = dt * i
             (x, vx) = Cubic.eval_cubic(*ax, t)
             (y, vy) = Cubic.eval_cubic(*ay, t)
-            results[:, i] = [t0+t, x, y, vx, vy, atan2(vy, vx)]
+            results[:, i] = [t0+t, x, y, vx, vy, sqrt(vx*vx + vy*vy), atan2(vy, vx)]
 
         # need to insert the final point, which may or may not be an integer
         # multiple of dt...
         (x, vx) = Cubic.eval_cubic(*ax, T)
         (y, vy) = Cubic.eval_cubic(*ay, T)
-        results[:, n] = [t1, x, y, vx, vy, atan2(vy, vx)]
+        results[:, n] = [t1, x, y, vx, vy, sqrt(vx*vx + vy*vy), atan2(vy, vx)]
 
         return results
 
@@ -427,30 +429,30 @@ class Cubic():
         by = -2 * ((v1[1] + 2 * v0[1]) * T - 3 * (p1[1] - p0[1])) / pow(T, 2)
 
         n = ceil(T / dt)
-        results = np.zeros((Cubic.TrajVal.num_vals, n+1))
+        results = np.zeros((Cubic.TrajVar.num_vals, n+1))
 
         for i in range(n):
             t = dt * i
             (x, vx) = Cubic.eval_cubic_alt(ax, bx, v0[0], p0[0], t)
             (y, vy) = Cubic.eval_cubic_alt(ay, by, v0[1], p0[1], t)
-            results[:, i] = [t+t0, x, y, vx, vy, atan2(vy, vx)]
+            results[:, i] = [t+t0, x, y, vx, vy, sqrt(vx*vx + vy*vy), atan2(vy, vx)]
 
         # need to insert the final point, which may or may not be an integer
         # multiple of dt...
         (x, vx) = Cubic.eval_cubic_alt(ax, bx, v0[0], p0[0], T)
         (y, vy) = Cubic.eval_cubic_alt(ay, by, v0[1], p0[1], T)
-        results[:, n] = [t1, x, y, vx, vy, atan2(vy, vx)]
+        results[:, n] = [t1, x, y, vx, vy, sqrt(vx*vx + vy*vy), atan2(vy, vx)]
 
         return results
 
 
 if __name__ == '__main__':
     import timeit
-    num = 1000
-    t = timeit.timeit(stmt='Cubic.np_test()',
+    num = 10
+    t = timeit.timeit(stmt='Cubic.test()',
                       setup='from __main__ import Cubic',
                       number=num)
     print('time: {}, per iteration: {}'.format(t, t/num))
 
-    whatever = Cubic.test()
-    whatever.plot()
+    whatever = Cubic.np_test()
+    whatever.np_plot()
