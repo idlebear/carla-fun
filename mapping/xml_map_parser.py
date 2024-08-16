@@ -2,8 +2,10 @@
 
 from xml.dom.minidom import parse, parseString
 import xml.etree.ElementTree as ET
-from xml.dom.minidom import parseString
+import matplotlib.pyplot as plt
 
+
+from enum import Enum
 import numpy as np
 import carla
 import cv2
@@ -13,9 +15,6 @@ import argparse
 
 MAP_MARGIN = 50.0
 MAP_RESOLUTION = 0.1
-
-
-from enum import Enum
 
 
 class RoadType(Enum):
@@ -102,7 +101,7 @@ def parse_lanes(road):
             b = float(element.get("b"))
             c = float(element.get("c"))
             d = float(element.get("d"))
-            offset = [s, a + s * b + s**2 * c + s**3 * d]
+            offset = [s, a, b, c, d]
             offsets.append(offset)
     else:
         offset = None
@@ -121,7 +120,7 @@ def parse_lanes(road):
             b = float(width_data.get("b"))
             c = float(width_data.get("c"))
             d = float(width_data.get("d"))
-            width = [s, a + s * b + s**2 * c + s**3 * d]
+            width = [s, a, b, c, d]
             widths.append(width)
         widths = np.array(widths)
 
@@ -135,30 +134,36 @@ def parse_lanes(road):
         return lane_dict
 
     # get the section with lane data
-    lane_section_data = lanes_data.find("laneSection")
+    lane_sections_data = lanes_data.findall("laneSection")
+    lane_sections = []
+    for lane_section_data in lane_sections_data:
 
-    # parse the lanes separately, starting with the left lanes
-    left_lanes = []
-    lane_data = lane_section_data.find("left")
-    if lane_data is not None:
-        for lane in lane_data:
-            left_lanes.append(parse_lane(lane))
-    left_lanes.sort(key=lambda x: abs(int(x["id"])))
+        s = float(lane_section_data.get("s"))
 
-    # TODO: Ignore the
-    # lane_data = lane_section_data.find("center")
-    # if lane_data is not None:
-    #     for lane in lane_data:
-    #         lanes.append(parse_lane(lane))
+        # parse the lanes separately, starting with the left lanes
+        left_lanes = []
+        lane_data = lane_section_data.find("left")
+        if lane_data is not None:
+            for lane in lane_data:
+                left_lanes.append(parse_lane(lane))
+        left_lanes.sort(key=lambda x: abs(int(x["id"])))
 
-    right_lanes = []
-    lane_data = lane_section_data.find("right")
-    if lane_data is not None:
-        for lane in lane_data:
-            right_lanes.append(parse_lane(lane))
-    left_lanes.sort(key=lambda x: abs(int(x["id"])))
+        # TODO: Ignore the
+        # lane_data = lane_section_data.find("center")
+        # if lane_data is not None:
+        #     for lane in lane_data:
+        #         lanes.append(parse_lane(lane))
 
-    return {"offsets": offsets, "left": left_lanes, "right": right_lanes}
+        right_lanes = []
+        lane_data = lane_section_data.find("right")
+        if lane_data is not None:
+            for lane in lane_data:
+                right_lanes.append(parse_lane(lane))
+        right_lanes.sort(key=lambda x: abs(int(x["id"])))
+
+        lane_sections.append([s, {"left": left_lanes, "right": right_lanes}])
+
+    return {"offsets": offsets, "lane_sections": lane_sections}
 
 
 def parse_objects(road):
@@ -253,22 +258,137 @@ def draw_road_polyline(img, points, origin, resolution):
     cv2.polylines(img, [polyline], isClosed=False, color=(255, 255, 255), thickness=3)
 
 
+def construct_polygon_array(road_id, geometry, offsets, lane_sections, side="left"):
+    sign = 1
+    if side == "right":
+        sign = -1
+
+    # adjust the centerline
+    center_line = np.zeros([len(geometry), 2])
+    offset_index = 0
+    for index, (s, x, y, heading) in enumerate(geometry):
+        if offset_index >= len(offsets) - 1:
+            pass
+        else:
+            while s >= offsets[offset_index + 1, 0]:
+                offset_index += 1
+                if offset_index == len(offsets) - 1:
+                    break
+
+        offset = (
+            offsets[offset_index, 1]
+            + offsets[offset_index, 2] * s
+            + offsets[offset_index, 3] * s**2
+            + offsets[offset_index, 4] * s**3
+        )
+        center_line[index, 0] = x + offset * np.cos(heading + np.pi / 2)
+        center_line[index, 1] = y + offset * np.sin(heading + np.pi / 2)
+
+    polygons = []
+    road_types = []
+
+    geometry_start_index = 0
+    for lane_section_index, lane_section in enumerate(lane_sections):
+        lanes = lane_section[1][side]
+        inner_lane_edge = center_line
+
+        for lane_index, lane in enumerate(lanes):
+            outer_lane_edge = np.zeros_like(inner_lane_edge)
+
+            for index in range(geometry_start_index, len(geometry)):
+                s = geometry[index][0]
+                if lane_section_index < len(lane_sections) - 1:
+                    if s >= lane_sections[lane_section_index + 1][0]:
+                        index -= 1
+                        break
+
+                x = geometry[index][1]
+                y = geometry[index][2]
+                heading = geometry[index][3]
+
+                width_index = 0
+                widths = lane["widths"]
+                if width_index >= len(widths) - 1:
+                    pass
+                else:
+                    while s >= widths[width_index + 1, 0]:
+                        width_index += 1
+                        if width_index == len(widths) - 1:
+                            break
+
+                width = (
+                    widths[width_index, 1]
+                    + widths[width_index, 2] * s
+                    + widths[width_index, 3] * s**2
+                    + widths[width_index, 4] * s**3
+                )
+                outer_lane_edge[index, 0] = inner_lane_edge[index, 0] + sign * width * np.cos(heading + np.pi / 2)
+                outer_lane_edge[index, 1] = inner_lane_edge[index, 1] + sign * width * np.sin(heading + np.pi / 2)
+
+            if geometry_start_index == index:
+                print(f"Empty polygon: {road_id}, road_type: {lane['type']}")
+                continue
+
+            index += 1
+            polygon = np.concatenate(
+                [
+                    inner_lane_edge[geometry_start_index:index, :],
+                    np.flip(outer_lane_edge[geometry_start_index:index, :], axis=0),
+                ],
+                axis=0,
+            )
+            polygons.append(polygon)
+            road_types.append(element_to_road_type[lane["type"]])
+
+            # move the inner lane edge to the outer lane edge
+            inner_lane_edge = outer_lane_edge
+
+        # move the geometry start index to the next lane section
+        geometry_start_index = index
+
+    return polygons, road_types
+
+
+def construct_object_polygons(geometry, objects):
+    polygons = []
+    road_types = []
+    for object in objects:
+        s = object["s"]
+
+        center_x = np.interp(s, geometry[:, 0], geometry[:, 1])
+        center_y = np.interp(s, geometry[:, 0], geometry[:, 2])
+        heading = np.interp(s, geometry[:, 0], geometry[:, 3]) + object["heading"]
+        # heading = np.interp(s, geometry[:, 0], geometry[:, 3])
+
+        # rotate the object outline to match the road heading
+        rotation_matrix = np.array([[np.cos(heading), -np.sin(heading)], [np.sin(heading), np.cos(heading)]])
+        corner_points = np.dot(rotation_matrix, np.array(object["outline"]).T).T
+
+        # calculate the corner points of the crosswalk
+        corner_points = corner_points + np.array([center_x, center_y])
+
+        polygons.append(corner_points)
+        road_types.append(object["type"])
+
+    return polygons, road_types
+
+
 def main():
     args = parse_arguments()
 
     # Connect to the CARLA server and download the map
-    # client = carla.Client(args.host, args.port)
-    # client.set_timeout(args.timeout)
-    # world = client.load_world(args.town)
-    # carla_map = world.get_map()
-    # map_data = carla_map.to_opendrive()
+    client = carla.Client(args.host, args.port)
+    client.set_timeout(args.timeout)
+    world = client.load_world(args.town)
+    carla_map = world.get_map()
+    map_data = carla_map.to_opendrive()
 
-    # # write the map data to a file
-    # with open("map_data.xml", "w") as f:
-    #     f.write(map_data)
+    # write the map data to a file
+    with open("map_data.xml", "w") as f:
+        f.write(map_data)
 
-    # Parse the map data
-    map_data = open("sample_map_data.xml", "r").read()
+    # # Parse the map data
+    # map_data = open("map_data.xml", "r").read()
     root = ET.fromstring(map_data)
 
     roads_data = root.findall("road")
@@ -281,7 +401,7 @@ def main():
         id = int(road_data.get("id"))
 
         # if id != 30 and id != 1772 and id != 10 and id != 1214 and id != 46 and id != 1192:
-        # if id != 10: #and id != 1772 and id != 10 and id != 1214 and id != 46 and id != 1192:
+        # if id != 1197 and id != 1192:
         #     continue
 
         name = road_data.get("name")
@@ -307,72 +427,25 @@ def main():
     map_height = int((max_y - min_y + 2 * MAP_MARGIN) / MAP_RESOLUTION)
 
     # create a blank image
-    img = np.zeros((map_height, map_width, 3), np.uint8)
+    centers_img = np.zeros((map_height, map_width, 3), np.uint8)
 
-    # # draw the roads
-    # for road in roads:
-    #     draw_road_polyline(img, road["geometry"], map_origin, MAP_RESOLUTION)
+    # draw the roads
+    for road in roads:
+        draw_road_polyline(centers_img, road["geometry"], map_origin, MAP_RESOLUTION)
+
+    plt.figure()
+    plt.imshow(centers_img)
+    plt.savefig("xml_centers_map.png")
+
+    # create a blank image
+    img = np.zeros((map_height, map_width, 3), np.uint8)
 
     # consruct the road polygons
     polygons = []
     for road in roads:
 
-        def construct_polygon_array(geometry, offsets, lanes, side="left"):
-            sign = 1
-            if side == "right":
-                sign = -1
-
-            # adjust the centerline
-            inner_lane_edge = np.zeros([len(geometry), 2])
-            for index, (s, x, y, heading) in enumerate(geometry):
-                offset = np.interp(s, offsets[:, 0], offsets[:, 1])
-                inner_lane_edge[index, 0] = x + offset * np.cos(heading + np.pi / 2)
-                inner_lane_edge[index, 1] = y + offset * np.sin(heading + np.pi / 2)
-
-            polygons = []
-            road_types = []
-            for lane in lanes:
-                outer_lane_edge = np.zeros_like(inner_lane_edge)
-                for index, (s, x, y, heading) in enumerate(geometry):
-                    width = np.interp(s, lane["widths"][:, 0], lane["widths"][:, 1])
-                    outer_lane_edge[index, 0] = inner_lane_edge[index, 0] + sign * width * np.cos(heading + np.pi / 2)
-                    outer_lane_edge[index, 1] = inner_lane_edge[index, 1] + sign * width * np.sin(heading + np.pi / 2)
-
-                polygon = np.concatenate([inner_lane_edge, np.flip(outer_lane_edge, axis=0)], axis=0)
-                polygons.append(polygon)
-
-                road_types.append(element_to_road_type[lane["type"]])
-
-                # move the inner lane edge to the outer lane edge
-                inner_lane_edge = outer_lane_edge
-
-            return polygons, road_types
-
-        def construct_object_polygons(geometry, objects):
-            polygons = []
-            road_types = []
-            for object in objects:
-                s = object["s"]
-
-                center_x = np.interp(s, geometry[:, 0], geometry[:, 1])
-                center_y = np.interp(s, geometry[:, 0], geometry[:, 2])
-                heading = np.interp(s, geometry[:, 0], geometry[:, 3]) + object["heading"]
-                # heading = np.interp(s, geometry[:, 0], geometry[:, 3])
-
-                # rotate the object outline to match the road heading
-                rotation_matrix = np.array([[np.cos(heading), -np.sin(heading)], [np.sin(heading), np.cos(heading)]])
-                corner_points = np.dot(rotation_matrix, np.array(object["outline"]).T).T
-
-                # calculate the corner points of the crosswalk
-                corner_points = corner_points + np.array([center_x, center_y])
-
-                polygons.append(corner_points)
-                road_types.append(object["type"])
-
-            return polygons, road_types
-
         left_polys, road_types = construct_polygon_array(
-            road["geometry"], road["lanes"]["offsets"], road["lanes"]["left"], side="left"
+            road["id"], road["geometry"], road["lanes"]["offsets"], road["lanes"]["lane_sections"], side="left"
         )
         for poly, road_type in zip(left_polys, road_types):
             if road_type == RoadType.DRIVING:
@@ -386,7 +459,7 @@ def main():
                 cv2.fillPoly(img, [points], color=colour)
 
         right_polys, road_types = construct_polygon_array(
-            road["geometry"], road["lanes"]["offsets"], road["lanes"]["right"], side="right"
+            road["id"], road["geometry"], road["lanes"]["offsets"], road["lanes"]["lane_sections"], side="right"
         )
         for poly, road_type in zip(right_polys, road_types):
             if road_type == RoadType.DRIVING:
@@ -405,8 +478,7 @@ def main():
             points = np.array([real_to_pixel(x, y, map_origin, MAP_RESOLUTION) for x, y in poly], dtype=np.int32)
             cv2.fillPoly(img, [points], color=colour)
 
-    import matplotlib.pyplot as plt
-
+    plt.figure(figsize=(20, 20))
     plt.imshow(img)
     plt.savefig("xml_map.png")
     plt.show()
